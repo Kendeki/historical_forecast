@@ -1,5 +1,6 @@
 import requests as r
 import json as j
+from datetime import date, timedelta
 from time import sleep
 from random import uniform
 
@@ -28,19 +29,40 @@ def create_json(start_date="2023-01-01", end_date="2024-01-01"):
         sleep(10)
         params["latitude"] = lat
         params["longitude"] = lon
+        
         try:
             response = r.get(url=url, params=params).json()
-        except:
+        except (j.decoder.JSONDecodeError, r.exceptions.RequestException):
             continue
         if response.get("error", False):
             print(f"Erro de gravação com as coordenadas ({lat}, {lon}).")
             print(response['reason'])
             continue
 
-        print(f"Gravação concluída com as coordenadas ({lat}, {lon})")
+        print(f"Gravação concluída com as coordenadas ({lat}, {lon}).")
         with open("data.ndjson", 'a') as f:
             f.write(j.dumps(response) + '\n')
 
+def tomorrows_prediction_data(lat: float, lon: float):
+    url = "https://api.open-meteo.com/v1/forecast"
+    params["latitude"] = lat
+    params["longitude"] = lon
+    params["start_date"] = str(date.today() - timedelta(days=365))
+    params["end_date"] = str(date.today())
+
+    try:
+        response = r.get(url=url, params=params).json()
+    except (j.decoder.JSONDecodeError, r.exceptions.RequestException):
+        return False
+    
+    if response.get("error", False):
+        print(f"Erro ao acessar as coordenadas ({lat}, {lon}).")
+        print(response['reason'])
+        return False
+
+    print(f"Acesso concluído as coordenadas ({lat}, {lon})")
+    return response
+    
 if __name__ == '__main__':
     create_json()
     create_json(start_date="2024-01-02", end_date="2025-01-01")

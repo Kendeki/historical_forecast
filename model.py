@@ -1,11 +1,11 @@
-import json
 import pandas as pd
+from json import loads
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import root_mean_squared_error, precision_score
+from dataFormer import tomorrows_prediction_data
 
-def models():
-
+def models(latitude: float, longitude: float):
     def group_weather(code):
         if code == 0:
             return 0
@@ -33,10 +33,11 @@ def models():
     }
 
     data_list = []
+    prediction_list = []
 
     with open("data.ndjson", "r", encoding="utf-8") as f:
         for line in f:
-            record = json.loads(line)
+            record = loads(line)
             lat    = record["latitude"]
             lon    = record["longitude"]
             daily  = record["daily"]
@@ -46,68 +47,89 @@ def models():
             data_temp["longitude"] = lon
             data_list.append(data_temp)
 
+    prediction_data = tomorrows_prediction_data(latitude, longitude)
+
+    if prediction_data:
+        lat    = prediction_data["latitude"]
+        lon    = prediction_data["longitude"]
+        daily  = prediction_data["daily"]
+        data_temp = pd.DataFrame(daily)
+
+        data_temp["latitude"]  = lat
+        data_temp["longitude"] = lon
+        prediction_list.append(data_temp)
+        prediction_list = pd.DataFrame(prediction_list)
+
     data = pd.concat(data_list, ignore_index=True)
 
-    data["time"]        = pd.to_datetime(data["time"])
-    data['day_of_year'] = data['time'].dt.dayofyear
-    data['month']       = data['time'].dt.month
-    data['weekday']     = data['time'].dt.weekday
-    data['year']        = data['time'].dt.year
+    for dataframe in (data, prediction_data):
+        dataframe["time"]        = pd.to_datetime(dataframe["time"])
+        dataframe['day_of_year'] = dataframe['time'].dt.dayofyear
+        dataframe['month']       = dataframe['time'].dt.month
+        dataframe['weekday']     = dataframe['time'].dt.weekday
+        dataframe['year']        = dataframe['time'].dt.year
 
-    data = data.sort_values(["latitude", "longitude", "time"])
-    data = data.drop(columns="time")
-    data["weather_code"] = data["weather_code"].apply(group_weather)
+        dataframe = dataframe.sort_values(["latitude", "longitude", "time"])
+        dataframe = dataframe.drop(columns="time")
+        dataframe["weather_code"] = dataframe["weather_code"].apply(group_weather)
 
-    for column in data:
-        if column == "weather_code":
-            continue
-        data[column+'1'] = data.groupby(["latitude", "longitude"])[column].shift(1)
-        data[column+'2'] = data.groupby(["latitude", "longitude"])[column].shift(2)
-
-    data = data.fillna(0)
-    data = data.dropna()
-    data = data.replace({None: 0})
+        dataframe["target_weather"] = dataframe.groupby(["latitude", "longitude"])["weather_code"].shift(-1)
+        dataframe["target_temperature"] = dataframe.groupby(["latitude", "longitude"])["temperature_2m_mean"].shift(-1)
+        
+        for column in dataframe:
+            if column == "weather_code":
+                continue
+            dataframe[column+'1'] = dataframe.groupby(["latitude", "longitude"])[column].shift(1)
+            dataframe[column+'2'] = dataframe.groupby(["latitude", "longitude"])[column].shift(2)
+        dataframe.replace({None: 0})
 
     size_train = int(data.shape[0]*0.8)
+    size_data = int(prediction_data.shape[0]) - 1
+    del data_list
+    del prediction_list
 
-    # /----- Temperature Prediction -----/
-
-    temperatures = ["temperature_2m_mean"]
+    # /----- Temperature Prediction Train -----/
 
     modelTemp = LinearRegression()
 
-    x_train = data.iloc[:size_train, :].drop(columns=temperatures)
-    x_test  = data.iloc[size_train:, :].drop(columns=temperatures)
-    y_train = data[temperatures].iloc[:size_train]
-    y_test  = data[temperatures].iloc[size_train:]
+    x_train = data.iloc[:size_train, :].drop(columns="target_temperature").dropna()
+    x_test  = data.iloc[size_train:, :].drop(columns="target_temperature").dropna()
+    y_train = data["target_temperature"].iloc[:size_train].dropna()
+    y_test  = data["target_temperature"].iloc[size_train:].dropna()
 
     modelTemp.fit(x_train, y_train)
-    predT = modelTemp.predict(x_test)
-    rmce = root_mean_squared_error(predT[:, 0], y_test.iloc[:, 0])
+    precision = precision_score(predW, y_test, average='weighted')
 
-    # /----- Weather Prediction -----/
+    # /----- Weather Prediction Train -----/
 
     counts  = data["weather_code"].value_counts()
     weights = {weight: counts.sum()/count for weight, count in counts.items()}
 
     modelWeather = RandomForestClassifier(class_weight=weights, random_state=67)
 
-    x_train = data.iloc[:size_train, 1:]
-    x_test  = data.iloc[size_train:, 1:]
-    y_train = data.iloc[:size_train, 0]
-    y_test  = data.iloc[size_train:, 0]
+    x_train = data.iloc[:size_train, 1:].dropna()
+    x_test  = data.iloc[size_train:, 1:].dropna()
+    y_train = data.iloc[:size_train, 0].dropna()
+    y_test  = data.iloc[size_train:, 0].dropna()
 
     modelWeather.fit(x_train, y_train)
-    predW = modelWeather.predict(x_test)
-    prc   = precision_score(predW, y_test, average='weighted')
+
+    # /----- Temperature tomorrow's prediction -----/
+
+#    y_test = 
+    margin = root_mean_squared_error(predT[:, 0], y_test.iloc[:, 0])
+
+
+    # /----- Weather tomorrow's prediction -----/
+
 
     return {"temperatures": predT[-1], 
-            "margin": rmce, 
+            "margin": margin, 
             "weather": weather_code[predW[-1]], 
-            "precision": prc}
+            "precision": precision}
 
 def main():
-    results = models()
+    results = models(0, 0)
     print(results)
 
 if __name__ == '__main__':
