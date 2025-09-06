@@ -1,9 +1,10 @@
 import pandas as pd
+from dataFormer import tomorrows_prediction_data, user_test_data
 from json import loads
+from math import ceil
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import root_mean_squared_error, precision_score
-from dataFormer import tomorrows_prediction_data
 
 def models(latitude: float, longitude: float):
     def group_weather(code):
@@ -37,96 +38,124 @@ def models(latitude: float, longitude: float):
 
     with open("data.ndjson", "r", encoding="utf-8") as f:
         for line in f:
-            record = loads(line)
-            lat    = record["latitude"]
-            lon    = record["longitude"]
-            daily  = record["daily"]
+            record    = loads(line)
+            lat       = record["latitude"]
+            lon       = record["longitude"]
+            daily     = record["daily"]
             data_temp = pd.DataFrame(daily)
 
             data_temp["latitude"]  = lat
             data_temp["longitude"] = lon
             data_list.append(data_temp)
+    data = pd.concat(data_list, ignore_index=True)
 
     prediction_data = tomorrows_prediction_data(latitude, longitude)
+    prediction_test = user_test_data(latitude, longitude)
 
     if prediction_data:
         lat    = prediction_data["latitude"]
         lon    = prediction_data["longitude"]
         daily  = prediction_data["daily"]
-        data_temp = pd.DataFrame(daily)
+        prediction_list = pd.DataFrame(daily)
 
-        data_temp["latitude"]  = lat
-        data_temp["longitude"] = lon
-        prediction_list.append(data_temp)
-        prediction_list = pd.DataFrame(prediction_list)
+        prediction_list["latitude"]  = lat
+        prediction_list["longitude"] = lon
 
-    data = pd.concat(data_list, ignore_index=True)
+    else:
+        raise RuntimeError(f'Dados indisponíves, tente novamente.')
+    prediction_data = prediction_list.copy()
+    prediction_list = []
+    
+    if prediction_test:
+        lat    = prediction_test["latitude"]
+        lon    = prediction_test["longitude"]
+        daily  = prediction_test["daily"]
+        prediction_list = pd.DataFrame(daily)
+
+        prediction_list["latitude"]  = lat
+        prediction_list["longitude"] = lon
+    else:
+        raise RuntimeError(f'Dados indisponíves, tente novamente.')
+    prediction_test = prediction_list.copy()
+
+    del data_list
+    del prediction_list
 
     for dataframe in (data, prediction_data):
         dataframe["time"]        = pd.to_datetime(dataframe["time"])
-        dataframe['day_of_year'] = dataframe['time'].dt.dayofyear
-        dataframe['month']       = dataframe['time'].dt.month
-        dataframe['weekday']     = dataframe['time'].dt.weekday
-        dataframe['year']        = dataframe['time'].dt.year
+        dataframe["day_of_year"] = dataframe["time"].dt.dayofyear
+        dataframe["month"]       = dataframe["time"].dt.month
+        dataframe["weekday"]     = dataframe["time"].dt.weekday
+        dataframe["year"]        = dataframe["time"].dt.year
 
-        dataframe = dataframe.sort_values(["latitude", "longitude", "time"])
-        dataframe = dataframe.drop(columns="time")
+        dataframe.sort_values(["latitude", "longitude", "time"], inplace=True)
+        dataframe.drop(columns="time", inplace=True)
         dataframe["weather_code"] = dataframe["weather_code"].apply(group_weather)
 
         dataframe["target_weather"] = dataframe.groupby(["latitude", "longitude"])["weather_code"].shift(-1)
         dataframe["target_temperature"] = dataframe.groupby(["latitude", "longitude"])["temperature_2m_mean"].shift(-1)
         
         for column in dataframe:
-            if column == "weather_code":
+            if column in ["weather_code", "latitude", "longitude", "day_of_year", "month",
+                          "weekday", "year", "target_weather", "target_temperature"]:
                 continue
-            dataframe[column+'1'] = dataframe.groupby(["latitude", "longitude"])[column].shift(1)
-            dataframe[column+'2'] = dataframe.groupby(["latitude", "longitude"])[column].shift(2)
-        dataframe.replace({None: 0})
+            dataframe[column+'_yesterday'] = dataframe.groupby(["latitude", "longitude"])[column].shift(1)
+            dataframe[column+'_b4_yesterday'] = dataframe.groupby(["latitude", "longitude"])[column].shift(2)
+        dataframe.replace({None: 0}, inplace=True)
+        dataframe.reset_index(drop=True, inplace=True)
 
     size_train = int(data.shape[0]*0.8)
     size_data = int(prediction_data.shape[0]) - 1
-    del data_list
-    del prediction_list
+    train_data = data.dropna().copy()
+    test_data = prediction_data.dropna().copy()
 
     # /----- Temperature Prediction Train -----/
 
     modelTemp = LinearRegression()
 
-    x_train = data.iloc[:size_train, :].drop(columns="target_temperature").dropna()
-    x_test  = data.iloc[size_train:, :].drop(columns="target_temperature").dropna()
-    y_train = data["target_temperature"].iloc[:size_train].dropna()
-    y_test  = data["target_temperature"].iloc[size_train:].dropna()
+    x_train = train_data.iloc[:size_train, :].drop(columns=["target_temperature"])
+    x_test  = train_data.iloc[size_train:, :].drop(columns=["target_temperature"])
+    y_train = train_data["target_temperature"].iloc[:size_train]
+    y_test  = train_data["target_temperature"].iloc[size_train:]
 
     modelTemp.fit(x_train, y_train)
-    precision = precision_score(predW, y_test, average='weighted')
+  
+    predT = modelTemp.predict(x_test)
+    margin = root_mean_squared_error(y_test, predT)
 
     # /----- Weather Prediction Train -----/
 
     counts  = data["weather_code"].value_counts()
     weights = {weight: counts.sum()/count for weight, count in counts.items()}
 
-    modelWeather = RandomForestClassifier(class_weight=weights, random_state=67)
+    modelWeather = RandomForestClassifier(class_weight=weights, random_state=67,)
 
-    x_train = data.iloc[:size_train, 1:].dropna()
-    x_test  = data.iloc[size_train:, 1:].dropna()
-    y_train = data.iloc[:size_train, 0].dropna()
-    y_test  = data.iloc[size_train:, 0].dropna()
+    x_train = train_data.iloc[:size_train, 1:]
+    y_train = train_data.iloc[:size_train, 0]
+    x_test  = train_data.iloc[size_train:, 1:]
+    y_test  = train_data.iloc[size_train:, 0]
 
     modelWeather.fit(x_train, y_train)
 
-    # /----- Temperature tomorrow's prediction -----/
+    predW = modelWeather.predict(x_test)
+    precision = precision_score(y_test, predW, average='weighted')
 
-#    y_test = 
-    margin = root_mean_squared_error(predT[:, 0], y_test.iloc[:, 0])
+    del train_data
+    del test_data
+
+    # /----- Temperature tomorrow's prediction -----/
 
 
     # /----- Weather tomorrow's prediction -----/
 
 
-    return {"temperatures": predT[-1], 
-            "margin": margin, 
+    # Celsius como unidade de medida para temperatura.
+    # Precision já está convertido para porcentagem.
+    
+    return {"temperatures": int(predT[-1]), 
+            "margin": ceil(margin), 
             "weather": weather_code[predW[-1]], 
-            "precision": precision}
+            "precision": round(precision * 100, 2)}
 
 def main():
     results = models(0, 0)

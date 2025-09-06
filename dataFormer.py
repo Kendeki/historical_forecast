@@ -43,24 +43,39 @@ def create_json(start_date="2023-01-01", end_date="2024-01-01"):
         with open("data.ndjson", 'a') as f:
             f.write(j.dumps(response) + '\n')
 
+def user_test_data(lat: float, lon: float):
+    params["latitude"] = lat
+    params["longitude"] = lon
+    params["start_date"] = str(date.today() - timedelta(days=365))
+    params["end_date"] = str(date.today() - timedelta(days=2))
+
+    try:
+        response = r.get(url=url, params=params).json()
+    except (j.decoder.JSONDecodeError, r.exceptions.RequestException):
+        raise RuntimeError(f'Erro ao acessar a API. Tente novamente.')
+    
+    if response.get("error", False):
+        raise RuntimeError(f"Erro ao acessar as coordenadas ({lat}, {lon}).\n{response['reason']}")
+
+    print(f"Dados para teste às coordenadas ({lat}, {lon}) foram obtidas.")
+    return response
+
 def tomorrows_prediction_data(lat: float, lon: float):
     url = "https://api.open-meteo.com/v1/forecast"
     params["latitude"] = lat
     params["longitude"] = lon
-    params["start_date"] = str(date.today() - timedelta(days=365))
+    params["start_date"] = str(date.today())
     params["end_date"] = str(date.today())
 
     try:
         response = r.get(url=url, params=params).json()
     except (j.decoder.JSONDecodeError, r.exceptions.RequestException):
-        return False
+        raise RuntimeError(f'Erro ao acessar a API. Tente novamente.')
     
     if response.get("error", False):
-        print(f"Erro ao acessar as coordenadas ({lat}, {lon}).")
-        print(response['reason'])
-        return False
+        raise RuntimeError(f"Erro ao acessar as coordenadas ({lat}, {lon}).\n{response['reason']}")
 
-    print(f"Acesso concluído as coordenadas ({lat}, {lon})")
+    print(f"Acesso concluído às coordenadas ({lat}, {lon})")
     return response
     
 if __name__ == '__main__':
