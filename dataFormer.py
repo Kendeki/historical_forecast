@@ -5,9 +5,9 @@ from time import sleep
 from random import uniform
 
 coords = [(round(uniform(-90, 90), 6), 
-                round(uniform(-180, 180), 6)) for _ in range(50)]
+                round(uniform(-180, 180), 6)) for _ in range(500)]
 
-params = {
+parameters = {
     "latitude": 0,
     "longitude": 0,
     "start_date":"",
@@ -20,9 +20,12 @@ params = {
             "apparent_temperature_mean", "cloud_cover_mean"]
 }
 
-def create_json(start_date=str(date.today() - timedelta(days=730)), 
-                end_date=str(date.today() - timedelta(days=365))):
+def create_json(start_date=str(date.today() - timedelta(days=200)), 
+                end_date=str(date.today() - timedelta(days=100))):
+    # TODO
+    # Erros ao converter em json, possível timeout da requisição.
     url = "https://archive-api.open-meteo.com/v1/archive"
+    params = parameters.copy()
     params["start_date"] = start_date
     params["end_date"] = end_date
 
@@ -33,7 +36,11 @@ def create_json(start_date=str(date.today() - timedelta(days=730)),
         
         try:
             response = r.get(url=url, params=params).json()
-        except (j.decoder.JSONDecodeError, r.exceptions.RequestException):
+        except (j.decoder.JSONDecodeError):
+            print(f"Ocorreu um erro ao converter o conteúdo das coordenadas ({lat}, {lon}) para json.")
+            continue
+        except (r.exceptions.RequestException):
+            print(f"Ocorreu um erro de requisição ao acessar as coordenadas ({lat}, {lon})")
             continue
         if response.get("error", False):
             print(f"Erro de gravação com as coordenadas ({lat}, {lon}).")
@@ -46,6 +53,7 @@ def create_json(start_date=str(date.today() - timedelta(days=730)),
 
 def user_test_data(lat: float, lon: float):
     url = "https://archive-api.open-meteo.com/v1/archive"
+    params = parameters.copy()
     params["latitude"] = lat
     params["longitude"] = lon
     params["start_date"] = str(date.today() - timedelta(days=365))
@@ -64,6 +72,7 @@ def user_test_data(lat: float, lon: float):
 
 def tomorrows_prediction_data(lat: float, lon: float):
     url = "https://api.open-meteo.com/v1/forecast"
+    params = parameters.copy()
     params["latitude"] = lat
     params["longitude"] = lon
     params["start_date"] = str(date.today() - timedelta(days=2))
